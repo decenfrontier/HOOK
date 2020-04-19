@@ -23,20 +23,18 @@ DWORD dwHookAddr = 0;	// Hook地址
 DWORD dwRetAddr = 0;	// 返回地址
 BYTE bHookFlag = 0;		// Hook标志
 BYTE byOriCode[PATCH_LEN] = { 0 };	// Hook地址处的原始硬编码
-char szNewText[] = "InlineHook!";	// 要修改的内容
+wchar_t szNewText[] = _T("InlineHook!");	// 要修改的内容
 
 void __declspec(naked) MyMsgBox()
 {
 	__asm
 	{
 		// 1 保存寄存器
-		pushad
-		pushfd
+		pushad		// 执行后 esp -= 0x20
 		// 2 修改数据:esp+4是第一个参数,esp+8是第二个参数
 		lea eax, dword ptr ds:[szNewText]
-		mov dword PTR ss:[esp + 8],eax	// 需自定义修改的位置
+		mov dword ptr ss:[esp + 0x20 + 8],eax	// 需自定义修改的位置
 		// 3 恢复寄存器
-		popfd
 		popad
 		// 4 执行覆盖代码(需自己设置)
 		mov edi,edi
@@ -92,7 +90,6 @@ void SetHook()
 	dwRetAddr = dwHookAddr + PATCH_LEN;
 	HookMessageBoxW();
 }
-
 
 BOOL APIENTRY DllMain( HMODULE hModule,
                        DWORD  ul_reason_for_call,
