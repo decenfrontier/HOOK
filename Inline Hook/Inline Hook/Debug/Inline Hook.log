@@ -1,4 +1,6 @@
-﻿  pch.cpp
+﻿cl : 命令行 warning D9025: 正在重写“/sdl-”(用“/GS-”)
+  pch.cpp
+cl : 命令行 warning D9025: 正在重写“/sdl-”(用“/GS-”)
   dllmain.cpp
 dllmain.obj : warning LNK4075: 忽略“/EDITANDCONTINUE”(由于“/INCREMENTAL:NO”规范)
   Inline Hook.vcxproj -> E:\VS_MyProj\Hook\Inline Hook\Debug\Inline Hook.dll

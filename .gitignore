@@ -3,6 +3,7 @@
 *.pch
 *.obj
 *.tlog
+*.log
 *.idb
 *.lib
 *.exe

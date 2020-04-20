@@ -3,6 +3,7 @@
 #include <tchar.h>
 #include <windows.h>
 #include "stdio.h"
+#include <atlconv.h>
 
 void DbgOutput(const char *szFormat, ...) {
 #ifdef _DEBUG
@@ -25,15 +26,26 @@ BYTE bHookFlag = 0;		// Hook标志
 BYTE byOriCode[PATCH_LEN] = { 0 };	// Hook地址处的原始硬编码
 wchar_t szNewText[] = _T("InlineHook!");	// 要修改的内容
 
-void __declspec(naked) MyMsgBox()
+void MyMsgBox(HWND hWnd, LPCTSTR lpText, LPCTSTR lpCaption, UINT uType)
+{
+	USES_CONVERSION;
+	// 函数内部随意写,但如果要调用 原来的API要先恢复原始代码,否则会死循环导致程序崩溃
+	MessageBoxA(hWnd, W2A(lpText), W2A(lpCaption), MB_OK);
+}
+
+void __declspec(naked) HookProc()
 {
 	__asm
 	{
 		// 1 保存寄存器
 		pushad		// 执行后 esp -= 0x20
-		// 2 修改数据:esp+4是第一个参数,esp+8是第二个参数
-		lea eax, dword ptr ds:[szNewText]
-		mov dword ptr ss:[esp + 0x20 + 8],eax	// 需自定义修改的位置
+		// 2 修改数据:esp+4是第一个参数,esp+8是第二个参数...(自定义)
+		push dword ptr ss : [esp + 0x20 + 0x10]		// 从最后一个参数开始传参
+		push dword ptr ss : [esp + 0x20 + 0x10]		// 因为push一次会令esp-4,所以不用变
+		push dword ptr ss : [esp + 0x20 + 0x10]
+		push dword ptr ss : [esp + 0x20 + 0x10]
+		call MyMsgBox
+		add esp,0x10
 		// 3 恢复寄存器
 		popad
 		// 4 执行覆盖代码(需自己设置)
@@ -59,7 +71,7 @@ BOOL HookMessageBoxW()
 			// 2 初始化byJmpCode
 			memset(&byJmpCode[1], 0x90, PATCH_LEN - 1);	// 第一个0xE9(Jmp)不变,后面全部替换为0x90(NOP)
 			// 3 写入跳转地址到byJmpCode数组
-			*(DWORD*)&byJmpCode[1] = (DWORD)MyMsgBox - (DWORD)dwHookAddr - 5;
+			*(DWORD*)&byJmpCode[1] = (DWORD)HookProc - (DWORD)dwHookAddr - 5;
 			// 4 开始patch
 			VirtualProtect((LPVOID)dwHookAddr, PATCH_LEN, PAGE_EXECUTE_READWRITE, &dwOldProtect);
 			memcpy((LPVOID)dwHookAddr, byJmpCode, PATCH_LEN);	// 写入跳转代码
