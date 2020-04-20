@@ -3,7 +3,7 @@
 #include <tchar.h>
 #include <windows.h>
 #include "stdio.h"
-#include <atlconv.h>
+#include <atlstr.h>
 
 void DbgOutput(const char *szFormat, ...) {
 #ifdef _DEBUG
@@ -18,89 +18,66 @@ void DbgOutput(const char *szFormat, ...) {
 #endif
 }
 
-#define PATCH_LEN 5	// 若Hook破坏了3行汇编语句,则此值为这3行语句的字节数
-
-DWORD dwHookAddr = 0;	// Hook地址
-DWORD dwRetAddr = 0;	// 返回地址
-BYTE bHookFlag = 0;		// Hook标志
-BYTE byOriCode[PATCH_LEN] = { 0 };	// Hook地址处的原始硬编码
-wchar_t szNewText[] = _T("InlineHook!");	// 要修改的内容
-
-void MyMsgBox(HWND hWnd, LPCTSTR lpText, LPCTSTR lpCaption, UINT uType)
+class CILHook
 {
-	USES_CONVERSION;
-	// 函数内部随意写,但如果要调用 原来的API要先恢复原始代码,否则会死循环导致程序崩溃
-	MessageBoxA(hWnd, W2A(lpText), W2A(lpCaption), MB_OK);
-}
-
-void __declspec(naked) HookProc()
-{
-	__asm
+public:
+	CILHook()
 	{
-		// 1 保存寄存器
-		pushad		// 执行后 esp -= 0x20
-		// 2 修改数据:esp+4是第一个参数,esp+8是第二个参数...(自定义)
-		push dword ptr ss : [esp + 0x20 + 0x10]		// 从最后一个参数开始传参
-		push dword ptr ss : [esp + 0x20 + 0x10]		// 因为push一次会令esp-4,所以不用变
-		push dword ptr ss : [esp + 0x20 + 0x10]
-		push dword ptr ss : [esp + 0x20 + 0x10]
-		call MyMsgBox
-		add esp,0x10
-		// 3 恢复寄存器
-		popad
-		// 4 执行覆盖代码(需自己设置)
-		mov edi,edi
-		push ebp
-		mov ebp,esp
-		// 5 返回执行
-		jmp dwRetAddr
+		m_dwHookAddr = NULL;
+		ZeroMemory(m_bOldBytes, 5);
+		ZeroMemory(m_bNewBytes, 5);
 	}
-}
-
-BOOL HookMessageBoxW()
-{
-	BYTE byJmpCode[PATCH_LEN] = { 0xE9 };	// 先全部初始化为0xE9
-	DWORD dwOldProtect = 0;
-	DbgOutput("开始HookMessageBoxW\n");
-	__try
+	~CILHook()
 	{
-		if (!bHookFlag)
+		UnHook();
+	}
+
+	VOID Hook(DWORD dwHookAddr, DWORD HookProc)
+	{
+		if (dwHookAddr != NULL)
 		{
-			// 1 存储原始字节到byOriCode数组
-			memcpy(byOriCode, (LPVOID)dwHookAddr, PATCH_LEN);
-			// 2 初始化byJmpCode
-			memset(&byJmpCode[1], 0x90, PATCH_LEN - 1);	// 第一个0xE9(Jmp)不变,后面全部替换为0x90(NOP)
-			// 3 写入跳转地址到byJmpCode数组
-			*(DWORD*)&byJmpCode[1] = (DWORD)HookProc - (DWORD)dwHookAddr - 5;
-			// 4 开始patch
-			VirtualProtect((LPVOID)dwHookAddr, PATCH_LEN, PAGE_EXECUTE_READWRITE, &dwOldProtect);
-			memcpy((LPVOID)dwHookAddr, byJmpCode, PATCH_LEN);	// 写入跳转代码
-			VirtualProtect((LPVOID)dwHookAddr, PATCH_LEN, dwOldProtect, 0);
-			bHookFlag = TRUE;
+			m_dwHookAddr = dwHookAddr;
+			ReadProcessMemory((HANDLE)-1, (LPCVOID)dwHookAddr, m_bOldBytes, 5, NULL);    // 保存修改前Hook地址处5个字节的内容到m_bOldBytes
+			m_bNewBytes[0] = 0xE9;    // jmp Opcode
+			*(DWORD *)(m_bNewBytes + 1) = HookProc - dwHookAddr - 5;
+			WriteProcessMemory((HANDLE)-1, (LPVOID)dwHookAddr, m_bNewBytes, 5, NULL);
 		}
-		else
-		{
-			// 1 卸载时直接写入原始代码
-			VirtualProtect((LPVOID)dwHookAddr, PATCH_LEN, PAGE_EXECUTE_READWRITE, &dwOldProtect);
-			memcpy((LPVOID)dwHookAddr, byOriCode, PATCH_LEN);	// 写入原始代码
-			VirtualProtect((LPVOID)dwHookAddr, PATCH_LEN, dwOldProtect, 0);
-			bHookFlag = FALSE;
-		}
-		return TRUE;
 	}
-	__except(1)
+	VOID UnHook()
 	{
-		DbgOutput("HookMessageBox() 异常\n");
-		return FALSE;
+		if (m_dwHookAddr != NULL)
+		{
+			WriteProcessMemory((HANDLE)-1, (LPVOID)m_dwHookAddr, m_bOldBytes, 5, NULL);
+		}
 	}
-}
+	VOID ReHook()
+	{
+		if (m_dwHookAddr != NULL)
+		{
+			WriteProcessMemory((HANDLE)-1, (LPVOID)m_dwHookAddr, m_bNewBytes, 5, NULL);
+		}
+	}
+private:
+	DWORD m_dwHookAddr;      // 要Hook的地址
+	BYTE m_bOldBytes[5];    // 函数入口代码
+	BYTE m_bNewBytes[5];    // Inline代码
+};
+CILHook g_ILHook;
 
-void SetHook()
+// 注意Hook的函数的参数和类型要相同,无论你是否使用它
+int WINAPI MyMessageBoxA(HWND hWnd, LPCTSTR lpText, LPCTSTR lpCaption, UINT uType) 
 {
-	dwHookAddr = (DWORD)GetProcAddress(LoadLibrary(_T("user32.dll")), "MessageBoxW");	// 可自定义
-	DbgOutput("dwHookAddr = %X\n", dwHookAddr);
-	dwRetAddr = dwHookAddr + PATCH_LEN;
-	HookMessageBoxW();
+	g_ILHook.UnHook();       // 若在Hook的API中调用原来的API,要先恢复原来的代码,否则将会死循环
+
+	int a = 1024;
+	int b = 2048;
+	int sum = a + b;
+	CString str;
+	str.Format(L"结果为:%d", sum);
+	MessageBoxW(NULL, str.GetBuffer(), L"MessageBoxA被Hook了", MB_OK);
+
+	g_ILHook.ReHook();    // 然后重新挂钩,方便后面继续监视MessageBoxA
+	return 0;
 }
 
 BOOL APIENTRY DllMain( HMODULE hModule,
@@ -113,7 +90,8 @@ BOOL APIENTRY DllMain( HMODULE hModule,
     case DLL_PROCESS_ATTACH:
 	{
 		DbgOutput("dll加载成功\n");
-		SetHook();
+		DWORD dwHookAddr = (DWORD)GetProcAddress(GetModuleHandle(L"user32.dll"), "MessageBoxA");    // 获取指定模块中函数的地址
+		g_ILHook.Hook(dwHookAddr, (DWORD)MyMessageBoxA);
 	}
 		break;
     case DLL_THREAD_ATTACH:
@@ -121,10 +99,7 @@ BOOL APIENTRY DllMain( HMODULE hModule,
     case DLL_THREAD_DETACH:
 		break;
     case DLL_PROCESS_DETACH:
-	{
-		DbgOutput("dll卸载成功\n");
-		SetHook();
-	}
+		g_ILHook.UnHook();
         break;
     }
     return TRUE;
